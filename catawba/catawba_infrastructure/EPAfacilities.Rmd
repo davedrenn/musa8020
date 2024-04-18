@@ -1,0 +1,167 @@
+---
+title: "EPAfacilities"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+
+library(sf)
+library(tidyverse)
+library(tigris)
+library(leaflet)
+library(arcpullr)
+
+```
+
+```{r lists}
+
+interest <- c("DRINKING WATER SYSTEM",
+              "ELECTRIC POWER GENERATOR (WATER BASED)",
+              "SEWAGE SLUDGE UTILIZATION",
+              "WASTEWATER FACILITY",
+              "COMMUNITY WATER SYSTEM",
+              "DRINKING WATER PROGRAM",
+              "GROUND WATER PROGRAM",
+              "ONSITE WASTEWATER TREATMENT",
+              "PUBLICLY OWNED TREATMENT WORKS",
+              "SURFACE WATER SITE",
+              "WATER TREATMENT PLANT")
+
+npdes <- c("ICIS-NPDES NON-MAJOR",
+           "NPDES MAJOR",
+           "NPDES PERMIT",
+           "NPDES STORMWATER PERMIT",
+           "ICIS-NPDES MAJOR",
+           "ICIS-NPDES UNPERMITTED",
+           "NPDES NON-MAJOR",
+           "NPDES PRETREATMENT PROGRAM")
+
+waterbasins <- c("Upper Catawba",
+                 "Lower Catawba",
+                 "South Fork Catawba",
+                 "Wateree")
+
+```
+
+```{r catawba}
+
+basins <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
+  dplyr::filter(name %in% waterbasins ) %>%
+  st_transform(crs="EPSG:4326")
+
+catawba <- basins %>%
+  st_union(.)
+
+counties_nc <- counties(state="North Carolina") %>%
+  st_transform(crs="EPSG:4326")
+counties_sc <- counties(state="South Carolina") %>%
+  st_transform(crs="EPSG:4326")
+counties_merge <- rbind(counties_nc, counties_sc)
+
+munis_nc <- county_subdivisions(state="North Carolina") %>%
+  st_transform(crs="EPSG:4326")
+munis_sc <- county_subdivisions(state="South Carolina") %>%
+  st_transform(crs="EPSG:4326")
+munis_merge <- rbind(munis_nc, munis_sc)
+
+
+counties_catawba <- st_intersection(counties_merge, catawba)
+
+munis_catawba <- st_intersection(munis_merge, catawba)
+
+counties_catawba_list <- counties_catawba$NAME
+munis_catawba_list <- munis_catawba %>%
+  dplyr::select(NAMELSAD, STATEFP) %>%
+  st_drop_geometry(.)
+
+write.csv(munis_catawba_list, "munis_list.csv")
+
+ggplot()+
+  geom_sf(data=munis_catawba)
+
+ggplot()+
+  geom_sf(data=counties_merge, fill=NA)+
+  geom_sf(data=basins, fill = "blue")
+
+```
+
+```{r data}
+
+frs <- st_read("data/NC_SC_epa_frs_FeaturesToJson.geojson") 
+
+counties_all <- counties_catawba$NAME
+
+facilities <- frs %>%
+  dplyr::filter(str_to_title(COUNTY_NAME) %in% counties_catawba_list) %>%
+  dplyr::filter(INTEREST_TYPE %in% interest) %>%
+  st_transform(crs="EPSG:4326") %>%
+  st_intersection(., catawba)
+
+nc_eji <- st_read("data/North Carolina/North Carolina.gdb") %>%
+  st_intersection(.,catawba)
+sc_eji <- st_read("data/South Carolina/South Carolina.gdb") %>%
+  st_intersection(.,catawba)
+
+eji <- rbind(nc_eji, sc_eji)
+
+ggplot()+
+  geom_sf(data=catawba) +
+  geom_sf(data=nc_eji, aes(fill=RPL_EJI, color=RPL_EJI),) + 
+  geom_sf(data=sc_eji, aes(fill=RPL_EJI, color=RPL_EJI)) +
+  geom_sf(data=facilities)
+
+nc_infra <- get_spatial_layer("https://services.nconemap.gov/secure/rest/services/NC1Map_Water_Sources/MapServer/1")%>%
+  st_transform(crs="EPSG:4326")%>%
+  st_intersection(., catawba)
+
+sc_infra <- get_spatial_layer("https://gis.dhec.sc.gov/arcgis/rest/services/water/publicwatersupply/MapServer/1")%>%
+  st_transform(crs="EPSG:4326")%>%
+  st_intersection(., catawba)
+
+ggplot()+
+  geom_sf(data=nc_infra) +
+  geom_sf(data=sc_infra)
+
+ggplot()+
+  geom_sf(data = catawba, fill = NA) +
+  geom_sf(data = eji, aes(fill=RPL_EJI, color=RPL_EJI)) +
+  geom_sf(data = facilities) +
+  geom_sf(data = nc_infra) +
+  geom_sf(data = sc_infra) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+
+
+```
+
+```{r leaflet}
+
+pal <- colorFactor("viridis", domain = NULL)
+
+leaflet(width = "100%") %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(data = catawba,
+              weight = 2,
+              opacity = .5,
+              color = "black",
+              fillOpacity = .01) %>%
+  addCircleMarkers(data = facilities,
+                   radius = 4,
+                   weight = 2,
+                   opacity = .8,
+                   stroke = TRUE,
+                   color = ~pal(INTEREST_TYPE)) %>%
+   addLegend(pal = pal, 
+            data = facilities,
+            values = ~INTEREST_TYPE,
+            title = "Facility Type")
+
+```
