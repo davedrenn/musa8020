@@ -1,0 +1,109 @@
+---
+title: "County Subdivisions"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+
+library(tidycensus)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(arcpullr)
+
+census_api_key("e13d5be5cb48d927009e0dca0af99d21918d514f", overwrite = TRUE)
+```
+
+```{r tracts}
+
+nc_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01003_001",
+  state = "North Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
+  geometry = TRUE,
+  output = "wide"
+)
+
+sc_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01003_001",
+  state = "South Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
+  geometry = TRUE,
+  output = "wide"
+)
+
+```
+
+```{r waterbasins}
+waterbasins <- c("Upper Catawba",
+                 "Lower Catawba",
+                 "South Fork Catawba",
+                 "Wateree")
+
+watershed <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
+  dplyr::filter(name %in% waterbasins ) %>%
+  st_transform(crs="EPSG:4326") %>%
+  st_union(.)
+```
+
+
+```{r watershed tracts}
+catawba_tracts <- rbind(nc_tracts, sc_tracts) %>%
+  st_transform(crs="EPSG:4326") %>%
+  rename(pop = B01003_001E) %>%
+  st_intersection(., watershed)
+
+ggplot()+
+  geom_sf(data=catawba_tracts, color = NA, aes(fill = pop)) +
+  scale_fill_viridis_c()+
+  theme_minimal()
+
+```
+
+```{r drinking water data}
+
+nc_infra <- get_spatial_layer("https://services.nconemap.gov/secure/rest/services/NC1Map_Water_Sources/MapServer/1")%>%
+  st_transform(crs="EPSG:4326")%>%
+  st_intersection(., watershed) %>%
+  dplyr::filter(pws_type == "Community", source_availability == "Permanent")
+
+nc_infra_intake = nc_infra %>%
+  dplyr::filter(source_type == "Surface Water") 
+
+nc_infra_intake2 = nc_infra %>%
+  dplyr::filter(source_type == "Surface Water") %>%
+  dplyr::select(objectid, geoms)
+
+nc_infra_wells = nc_infra %>%
+  dplyr::filter(source_type == "Groundwater")
+
+nc_infra_wells2 = nc_infra %>%
+  dplyr::filter(source_type == "Groundwater") %>%
+  dplyr::select(objectid, geoms)
+
+sc_infra_intake <- get_spatial_layer("https://gis.dhec.sc.gov/arcgis/rest/services/water/publicwatersupply/MapServer/0")%>%
+  st_transform(crs="EPSG:4326")%>%
+  st_intersection(., watershed)
+
+sc_infra_intake2 <- sc_infra_intake %>%
+  dplyr::select(OBJECTID, geoms) %>%
+  dplyr::rename(objectid = OBJECTID)
+
+sc_infra_wells <- get_spatial_layer("https://gis.dhec.sc.gov/arcgis/rest/services/water/publicwatersupply/MapServer/1")%>%
+  st_transform(crs="EPSG:4326")%>%
+  st_intersection(., watershed)
+
+sc_infra_wells2 <- sc_infra_wells %>%
+  dplyr::select(OBJECTID, geoms)%>%
+  dplyr::rename(objectid = OBJECTID)
+
+infra <- rbind(nc_infra_intake2, nc_infra_wells2, sc_infra_intake2, sc_infra_wells2)
+
+
+
+```
