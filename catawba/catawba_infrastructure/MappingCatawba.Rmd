@@ -103,7 +103,29 @@ sc_infra_wells2 <- sc_infra_wells %>%
   dplyr::rename(objectid = OBJECTID)
 
 infra <- rbind(nc_infra_intake2, nc_infra_wells2, sc_infra_intake2, sc_infra_wells2)
-
+sc_infra <- rbind(sc_infra_intake, sc_infra_wells)
 
 
 ```
+
+```{r sc dwsrf}
+
+sc_srf <- read_csv("data/sc_srf_catawba.csv")
+sc_srf_points <- st_as_sf(sc_dwsrf, coords = c("longitude", "latitude"), crs = 4326)
+sc_srf_catawba <- st_intersection(sc_dwsrf_points, watershed)
+
+invest <- st_join(catawba_tracts, sc_srf_catawba) %>%
+  group_by(GEOID) %>%
+  summarize(cost_est = sum(total_proj_cost_est))
+
+infra_invest <- st_join(catawba_tracts, sc_infra_intake) %>%
+  group_by(GEOID) %>%
+  summarize(count = n())
+
+
+
+ggplot()+
+  geom_sf(data=invest, aes(fill = cost_est))
+
+
+```      
