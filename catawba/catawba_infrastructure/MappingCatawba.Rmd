@@ -145,6 +145,8 @@ infra <- rbind(nc_infra_intake2, nc_infra_wells2, sc_infra_intake2, sc_infra_wel
 sc_ms4 <- st_read("data/sc_MS4.geojson") %>%
   mutate(geometry = st_make_valid(st_zm(geometry)))
 
+sc_npdes <- st_read("data/sc_NPDES_Permits.geojson")
+
 intersection <- st_intersection(catawba_tracts_sc, sc_ms4)
 
 # Count the number of polygons from MS4 touching each census tract
@@ -179,11 +181,24 @@ count_per_tract1 <- within2 %>%
 catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, count_per_tract1, by = "GEOID") %>%
   mutate(wells = ifelse(is.na(wells), 0, wells))
 
+within3 <- st_join(sc_npdes, catawba_tracts_sc1, join = st_within)
+
+count_per_tract1 <- within3 %>%
+  group_by(GEOID) %>%
+  summarise(permits = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, count_per_tract1, by = "GEOID") %>%
+  mutate(permits = ifelse(is.na(permits), 0, permits))
+
 sc_eji1 <- sc_eji %>%
   dplyr::select(GEOID, SPL_EJI, RPL_EBM, EPL_IMPWTR) %>%
   st_drop_geometry()
 
 catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, sc_eji1, by = "GEOID") %>% na.omit()
+
+catawba_tracts_geo <- catawba_tracts_sc1 %>%
+  dplyr::select(GEOID, geometry)
 
 ```
 
@@ -191,6 +206,8 @@ catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, sc_eji1, by = "GEOID") %>% n
 
 library(cluster)
 library(factoextra)
+set.seed(124)
+
 
 df <- catawba_tracts_sc1
 
@@ -198,22 +215,40 @@ row.names(df) <- df[[1]]
 
 
 df <- df %>%
-  dplyr::select(-GEOID, -NAME) %>%
+  dplyr::select(-GEOID, -NAME, -RPL_EBM, -EPL_IMPWTR) %>%
   st_drop_geometry()
 
-df <- scale(df)
+df_scaled <- scale(df)
 
-clusters <- kmeans(df, centers = 7, nstart = 5)
+clusters <- kmeans(df_scaled, centers = 3, nstart = 5)
 
-fviz_cluster(clusters, data = df)
+cluster_centers <- clusters$centers
 
-set.seed(124)
+cluster_centers_df <- as.data.frame(cluster_centers)
 
-fviz_nbclust(df, kmeans, method = "wss")
+#fviz_cluster(clusters, data = df)
 
-cluster_assignments <- as_data_frame(clusters$cluster)
+#fviz_nbclust(df, kmeans, method = "wss")
 
-df$cluster <- cluster_assignments
+df <- cbind(df, cluster = clusters$cluster)
+
+# Get the row names
+row_names <- rownames(df)
+
+# Reset row names
+rownames(df) <- NULL
+
+# Add row names as a regular column
+df <- cbind(GEOID = row_names, df)
+df$cluster <- as.character(df$cluster)
+
+catawba_tracts_sc2 <- left_join(catawba_tracts_geo, df, by = "GEOID")
+
+catawba_tracts_sc2 <- st_as_sf(catawba_tracts_sc2)
+
+
+ggplot()+
+  geom_sf(data=catawba_tracts_sc2, aes(fill = cluster))
 
 ```
 
