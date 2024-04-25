@@ -6,6 +6,7 @@ date: "`r Sys.Date()`"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
 ```
 
 ```{r packages}
@@ -26,7 +27,8 @@ nc_tracts <- get_acs(
   variables = "B01003_001",
   state = "North Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
   geometry = TRUE,
-  output = "wide"
+  output = "wide",
+  year = 2019
 )
 
 sc_tracts <- get_acs(
@@ -34,7 +36,8 @@ sc_tracts <- get_acs(
   variables = "B01003_001",
   state = "South Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
   geometry = TRUE,
-  output = "wide"
+  output = "wide",
+  year = 2019
 )
 
 ```
@@ -58,10 +61,40 @@ catawba_tracts <- rbind(nc_tracts, sc_tracts) %>%
   rename(pop = B01003_001E) %>%
   st_intersection(., watershed)
 
+catawba_tracts_sc <- sc_tracts %>%
+  st_transform(crs="EPSG:4326") %>%
+  rename(pop = B01003_001E) %>%
+  dplyr::select(-B01003_001M) %>%
+  st_intersection(., watershed)
+
 ggplot()+
-  geom_sf(data=catawba_tracts, color = NA, aes(fill = pop)) +
+  geom_sf(data=catawba_tracts_sc, color = NA, aes(fill = pop)) +
   scale_fill_viridis_c()+
   theme_minimal()
+
+```
+```{r eji}
+
+nc_eji <- st_read("data/North Carolina/North Carolina.gdb") %>%
+  st_intersection(.,watershed)
+sc_eji <- st_read("data/South Carolina/South Carolina.gdb") %>%
+  st_intersection(.,watershed)
+
+eji <- rbind(nc_eji, sc_eji)
+
+ggplot()+
+  geom_sf(data=eji, aes(fill = SPL_EJI), color=NA) +
+  scale_fill_viridis_c()
+
+ggplot()+
+  geom_sf(data=eji, aes(fill = RPL_EBM), color=NA) +
+  scale_fill_viridis_c()
+
+ggplot()+
+  geom_sf(data=eji, aes(fill = EPL_IMPWTR), color=NA) +
+  scale_fill_viridis_c()
+
+
 
 ```
 
@@ -103,16 +136,94 @@ sc_infra_wells2 <- sc_infra_wells %>%
   dplyr::rename(objectid = OBJECTID)
 
 infra <- rbind(nc_infra_intake2, nc_infra_wells2, sc_infra_intake2, sc_infra_wells2)
-sc_infra <- rbind(sc_infra_intake, sc_infra_wells)
 
 
 ```
 
+```{r sc data}
+
+sc_ms4 <- st_read("data/sc_MS4.geojson") %>%
+  mutate(geometry = st_make_valid(st_zm(geometry)))
+
+intersection <- st_intersection(catawba_tracts_sc, sc_ms4)
+
+# Count the number of polygons from MS4 touching each census tract
+count_per_tract <- intersection %>%
+  group_by(GEOID) %>%
+  summarise(count = n()) %>%
+  st_drop_geometry()
+
+# Join the counts back to census tracts
+catawba_tracts_sc1 <- left_join(catawba_tracts_sc, count_per_tract, by = c("GEOID" = "GEOID")) %>%
+  mutate(count = ifelse(is.na(count), 0, count))
+
+within <- st_join(sc_infra_intake, catawba_tracts_sc1, join = st_within)
+
+# Count the number of points from intake dataset within each census tract
+count_per_tract <- within %>%
+  group_by(GEOID) %>%
+  summarise(intakes = n())%>%
+  st_drop_geometry()
+
+# Join the counts back to census tracts
+catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, count_per_tract, by = "GEOID") %>%
+  mutate(intakes = ifelse(is.na(intakes), 0, intakes))
+
+within2 <- st_join(sc_infra_wells, catawba_tracts_sc1, join = st_within)
+
+count_per_tract1 <- within2 %>%
+  group_by(GEOID) %>%
+  summarise(wells = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, count_per_tract1, by = "GEOID") %>%
+  mutate(wells = ifelse(is.na(wells), 0, wells))
+
+sc_eji1 <- sc_eji %>%
+  dplyr::select(GEOID, SPL_EJI, RPL_EBM, EPL_IMPWTR) %>%
+  st_drop_geometry()
+
+catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, sc_eji1, by = "GEOID") %>% na.omit()
+
+```
+
+```{r kmeans}
+
+library(cluster)
+library(factoextra)
+
+df <- catawba_tracts_sc1
+
+row.names(df) <- df[[1]]
+
+
+df <- df %>%
+  dplyr::select(-GEOID, -NAME) %>%
+  st_drop_geometry()
+
+df <- scale(df)
+
+clusters <- kmeans(df, centers = 7, nstart = 5)
+
+fviz_cluster(clusters, data = df)
+
+set.seed(124)
+
+fviz_nbclust(df, kmeans, method = "wss")
+
+cluster_assignments <- as_data_frame(clusters$cluster)
+
+df$cluster <- cluster_assignments
+
+```
+
+
+
 ```{r sc dwsrf}
 
 sc_srf <- read_csv("data/sc_srf_catawba.csv")
-sc_srf_points <- st_as_sf(sc_dwsrf, coords = c("longitude", "latitude"), crs = 4326)
-sc_srf_catawba <- st_intersection(sc_dwsrf_points, watershed)
+sc_srf_points <- st_as_sf(sc_srf, coords = c("longitude", "latitude"), crs = 4326)
+sc_srf_catawba <- st_intersection(sc_srf_points, watershed)
 
 invest <- st_join(catawba_tracts, sc_srf_catawba) %>%
   group_by(GEOID) %>%
@@ -125,7 +236,9 @@ infra_invest <- st_join(catawba_tracts, sc_infra_intake) %>%
 
 
 ggplot()+
-  geom_sf(data=invest, aes(fill = cost_est))
+  geom_sf(data=watershed)+
+  geom_sf(data=sc_srf_points)
+  
 
 
 ```      
