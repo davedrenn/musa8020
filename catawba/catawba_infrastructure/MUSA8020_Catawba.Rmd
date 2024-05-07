@@ -350,22 +350,6 @@ intake <- rbind(nc_intake, sc_intake)
 wells <- rbind(nc_wells, sc_wells)
 ```
 
-```{r map_intakes_wells, fig.height = 6}
-ggplot() +
-  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
-  s +
-  geom_sf(data=wells, aes(color = "wells"), size = 2) +
-  geom_sf(data=intake, aes(color = "intake"), size = 4) +
-  w +
-  scale_color_manual(values = c("wells" = alpha("slategray", .5), "intake" = alpha("blue", .5)),
-                     labels = c("Intakes", "Wells")) +
-  labs(color = "Type")+
-  theme_catawba() +
-  annotation_custom(annotations)
-```
-
-
-
 ```{r other_infra, results='hide'}
 
 nc_ms4 <- st_read("data/nc_MS4.geojson") %>%
@@ -456,6 +440,21 @@ sc_dams_other <- sc_dams %>%
 hydroelectric <- rbind(nc_hydroelectric, sc_hydroelectric)
 
 dams_other <- rbind(nc_dams_other, sc_dams_other)
+```
+```{r map_intakes_wells, fig.height = 6}
+ggplot() +
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  s +
+  geom_sf(data=npdes, color = alpha("darkgreen", .5), size = 1)+
+  geom_sf(data=wells, color = alpha("slategray", .5), size = 1) +
+  geom_sf(data=dams_other, color = alpha("orange", .5), size = 1) +
+  geom_sf(data=st_centroid(ms4), color = alpha("pink", .5), size = 1) +
+  geom_sf(data=intake, color = alpha("purple", .5), size = 1) +
+  geom_sf(data=hydroelectric, color = alpha("red", .5), size = 1) +
+  w +
+  labs(color = "Type")+
+  theme_catawba() +
+  annotation_custom(annotations)
 ```
 
 
