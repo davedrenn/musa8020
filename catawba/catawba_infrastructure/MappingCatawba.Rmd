@@ -17,28 +17,50 @@ library(tigris)
 library(sf)
 library(arcpullr)
 
+options(scipen = 999)
 census_api_key("e13d5be5cb48d927009e0dca0af99d21918d514f", overwrite = TRUE)
 ```
 
-```{r tracts}
+```{r map_theme, include = FALSE}
 
-nc_tracts <- get_acs(
-  geography = "tract",
-  variables = "B01003_001",
-  state = "North Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
-  geometry = TRUE,
-  output = "wide",
-  year = 2019
-)
+theme_catawba <- function(){
+  font = "sans"
+  theme_minimal() %+replace%
+    
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      
+      axis.ticks = element_blank(),
+      axis.ticks.x.bottom = element_line(color = "grey90", size = .5),
+      
+      plot.title = element_text(
+        family = font,
+        size = 14,
+        face = 'bold',
+        hjust = 0,
+        vjust = 0),
 
-sc_tracts <- get_acs(
-  geography = "tract",
-  variables = "B01003_001",
-  state = "South Carolina", # Replace XX with the state FIPS code (e.g., "NY" for New York)
-  geometry = TRUE,
-  output = "wide",
-  year = 2019
-)
+      plot.subtitle = element_text(
+        family = font,
+        size = 12,
+        hjust = 0,
+        margin = margin(2, b = 10),
+        face = "italic"),
+      
+      plot.caption = element_text(
+        family = font,
+        size = 10,
+        hjust = 1),
+      
+      axis.title = element_text(
+        family = font,
+        size = 10,
+        margin = margin(5, b = 10)),
+      
+      axis.text = element_blank()
+      )
+}
 
 ```
 
@@ -48,31 +70,142 @@ waterbasins <- c("Upper Catawba",
                  "South Fork Catawba",
                  "Wateree")
 
+waterbasin <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
+  dplyr::filter(name %in% waterbasins ) %>%
+  st_transform(crs="EPSG:4326")
+
 watershed <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
   dplyr::filter(name %in% waterbasins ) %>%
   st_transform(crs="EPSG:4326") %>%
   st_union(.)
+
+bbox <- st_bbox(watershed)
+bbox_sf <- st_as_sfc(st_bbox(watershed))
+
+```
+
+```{r tracts}
+
+nc_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01003_001",
+  state = "North Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+sc_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01003_001",
+  state = "South Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+nc_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001",
+  state = "North Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+sc_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001",
+  state = "South Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+tn_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001",
+  state = "Tennessee", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+ga_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001",
+  state = "Georgia", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)
+
+state_abbr <- c("NC", "SC", "TN", "GA")
+
+states <- states() %>%
+  filter(STUSPS %in% state_abbr)
+
+nc_places <- get_acs(
+  geography = "place",
+  variables = "B01003_001",
+  state = "North Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)%>%
+  rename(pop = B01003_001E)%>%
+  st_transform(crs="EPSG:4326")
+
+sc_places <- get_acs(
+  geography = "place",
+  variables = "B01003_001",
+  state = "South Carolina", 
+  geometry = TRUE,
+  output = "wide",
+  year = 2019
+)%>%
+  rename(pop = B01003_001E)%>%
+  st_transform(crs="EPSG:4326")
+
+places_points <- rbind(st_centroid(nc_places), st_centroid(sc_places))%>%
+  st_intersection(., bbox_sf)
+
+catawba_points <- places_points %>%
+  st_intersection(.,watershed)
+
 ```
 
 
+
+
 ```{r watershed tracts}
-catawba_tracts <- rbind(nc_tracts, sc_tracts) %>%
+
+
+
+counties <- rbind(nc_counties, sc_counties, tn_counties, ga_counties) %>%
   st_transform(crs="EPSG:4326") %>%
   rename(pop = B01003_001E) %>%
-  st_intersection(., watershed)
+  dplyr::select(-B01003_001M)%>%
+  st_intersection(., bbox_sf)
 
-catawba_tracts_sc <- sc_tracts %>%
+catawba_tracts <- rbind(nc_tracts, sc_tracts) %>%
   st_transform(crs="EPSG:4326") %>%
   rename(pop = B01003_001E) %>%
   dplyr::select(-B01003_001M) %>%
   st_intersection(., watershed)
 
+
 ggplot()+
-  geom_sf(data=catawba_tracts_sc, color = NA, aes(fill = pop)) +
-  scale_fill_viridis_c()+
-  theme_minimal()
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, aes(fill = pop)) +
+  geom_sf(data=states, color = "white", lwd = 2, fill = NA)+
+  geom_sf(data=catawba_points, color = alpha("gold", .75), aes(size = pop)) +
+  geom_sf(data=watershed, color = alpha("orangered", .75), lwd = 2, fill = NA) +
+  scale_fill_viridis_c(option="mako", direction = -1)+
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  theme_catawba()
 
 ```
+
 ```{r eji}
 
 nc_eji <- st_read("data/North Carolina/North Carolina.gdb") %>%
@@ -84,15 +217,18 @@ eji <- rbind(nc_eji, sc_eji)
 
 ggplot()+
   geom_sf(data=eji, aes(fill = SPL_EJI), color=NA) +
-  scale_fill_viridis_c()
+  scale_fill_viridis_c()+
+  theme_catawba()
 
 ggplot()+
   geom_sf(data=eji, aes(fill = RPL_EBM), color=NA) +
-  scale_fill_viridis_c()
+  scale_fill_viridis_c()+
+  theme_catawba()
 
 ggplot()+
   geom_sf(data=eji, aes(fill = EPL_IMPWTR), color=NA) +
-  scale_fill_viridis_c()
+  scale_fill_viridis_c()+
+  theme_catawba()
 
 
 
@@ -199,6 +335,15 @@ catawba_tracts_sc1 <- left_join(catawba_tracts_sc1, sc_eji1, by = "GEOID") %>% n
 
 catawba_tracts_geo <- catawba_tracts_sc1 %>%
   dplyr::select(GEOID, geometry)
+
+```
+
+```{r dbscan}
+library(dbscan)
+
+
+df_g <- 
+
 
 ```
 

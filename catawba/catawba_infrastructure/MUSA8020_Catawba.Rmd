@@ -1,0 +1,606 @@
+---
+title: "Catawba Wateree Watershed Infrastructure: Mapping and Analysis"
+author: "Dave Drennan"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+rm(list = ls())
+```
+
+```{r packages}
+library(tidycensus)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(arcpullr)
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(gridtext)
+library(cluster)
+library(factoextra)
+library(kableExtra)
+library(usmap)
+```
+
+```{r options}
+set.seed(10)
+options(scipen = 999)
+census_api_key("e13d5be5cb48d927009e0dca0af99d21918d514f", overwrite = TRUE)
+map_crs="EPSG:2264"
+```
+
+```{r theme, include = FALSE}
+theme_catawba <- function(){
+  font = "sans"
+  theme_minimal() %+replace%
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.ticks = element_blank(),
+      axis.ticks.x.bottom = element_line(
+        color = "grey90", 
+        size = .5),
+      plot.title = element_text(
+        family = font,
+        size = 14,
+        face = 'bold',
+        hjust = 0,
+        vjust = 0),
+      plot.subtitle = element_text(
+        family = font,
+        size = 12,
+        hjust = 0,
+        margin = margin(2, b = 10),
+        face = "italic"),
+      plot.caption = element_text(
+        family = font,
+        size = 10,
+        hjust = 1),
+      axis.title = element_text(
+        family = font,
+        size = 10,
+        margin = margin(5, b = 10)),
+      axis.text = element_blank(),
+      legend.position = "right",
+      legend.text = element_text(
+        family = font,
+        size = 8)
+      )
+}
+```
+
+```{r watershed, results='hide'}
+waterbasins <- c("Upper Catawba", "Lower Catawba", "South Fork Catawba", "Wateree")
+
+waterbasin <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
+  dplyr::filter(name %in% waterbasins ) %>%
+  st_transform(crs=map_crs)
+
+watershed <- st_read("data/WBD_03_HU2_Shape/Shape/WBDHU8.shp") %>%
+  dplyr::filter(name %in% waterbasins ) %>%
+  st_transform(crs=map_crs) %>%
+  st_union(.)
+
+bbox <- st_bbox(watershed)
+bbox_sf <- st_as_sfc(st_bbox(watershed))
+
+```
+
+```{r acs, results='hide'}
+vars = c("B01003_001","B19013_001")
+
+nc_tracts <- get_acs(geography = "tract", variables = vars, state = "North Carolina", geometry = TRUE, output = "wide", year = 2019)
+sc_tracts <- get_acs(geography = "tract", variables = vars, state = "South Carolina", geometry = TRUE, output = "wide", year = 2019)
+tn_tracts <- get_acs(geography = "tract", variables = vars, state = "Tennessee", geometry = TRUE, output = "wide", year = 2019)
+ga_tracts <- get_acs(geography = "tract", variables = vars, state = "Georgia", geometry = TRUE, output = "wide", year = 2019)
+
+catawba_tracts <- rbind(nc_tracts, sc_tracts, tn_tracts, ga_tracts) %>%
+  st_transform(crs=map_crs) %>%
+  rename(pop = B01003_001E,
+         medhhinc = B19013_001E) %>%
+  dplyr::select(-B01003_001M, -B19013_001M) %>%
+  st_intersection(., bbox_sf)
+
+nc_counties <- get_acs(geography = "county", variables = vars, state = "North Carolina", geometry = TRUE, output = "wide", year = 2019)
+sc_counties <- get_acs(geography = "county", variables = vars, state = "South Carolina", geometry = TRUE, output = "wide", year = 2019)
+tn_counties <- get_acs(geography = "county", variables = vars, state = "Tennessee", geometry = TRUE, output = "wide", year = 2019)
+ga_counties <- get_acs(geography = "county", variables = vars, state = "Georgia", geometry = TRUE, output = "wide", year = 2019)
+
+counties <- rbind(nc_counties, sc_counties, tn_counties, ga_counties) %>%
+  st_transform(crs=map_crs) %>%
+  rename(pop = B01003_001E,
+         medhhinc = B19013_001E) %>%
+  dplyr::select(-B01003_001M, -B19013_001M) %>%
+  st_intersection(., bbox_sf)
+
+counties_catawba <- counties %>%
+  st_intersection(., watershed) %>%
+  separate(NAME, into = c("place", "state"), sep = ", ", remove = TRUE)
+
+state_abbr <- c("NC", "SC", "TN", "GA")
+
+states <- states() %>%
+  filter(STUSPS %in% state_abbr) %>%
+  st_transform(crs=map_crs) %>%
+  st_intersection(., bbox_sf)
+
+nc_places <- get_acs( geography = "place", variables = vars, state = "North Carolina", geometry = TRUE, output = "wide", year = 2019) %>%
+  rename(pop = B01003_001E,
+         medhhinc = B19013_001E) %>%
+  dplyr::select(-B01003_001M, -B19013_001M) %>%
+  st_transform(crs=map_crs)
+
+sc_places <- get_acs(geography = "place", variables = vars, state = "South Carolina", geometry = TRUE, output = "wide", year = 2019) %>%
+  rename(pop = B01003_001E,
+         medhhinc = B19013_001E) %>%
+  dplyr::select(-B01003_001M, -B19013_001M) %>%
+  st_transform(crs=map_crs)
+
+places_points <- rbind(st_centroid(nc_places), st_centroid(sc_places))%>%
+  st_intersection(., bbox_sf)
+
+catawba_points <- places_points %>%
+  st_intersection(.,watershed) %>%
+  separate(NAME, into = c("place", "state"), sep = ", ", remove = TRUE)
+
+catawba_places <- rbind(catawba_points, counties_catawba)
+```
+
+```{r us map}
+
+watershed_us <- watershed %>%
+  st_transform(crs="EPSG:9311")
+
+plot_usmap(regions = "states", color = alpha("white", .5), lwd = .1, fill = "grey90") +
+  geom_sf(data=watershed, fill = "orangered", color = NA)+
+  labs(title = "Catawba Wateree Watershed",
+       subtitle = "North and South Carolina") + 
+  theme_catawba()
+
+```
+
+```{r eji, results='hide'}
+nc_eji <- st_read("data/North Carolina/North Carolina.gdb") %>%
+  st_transform(crs=map_crs) %>%
+  st_intersection(.,watershed)
+sc_eji <- st_read("data/South Carolina/South Carolina.gdb") %>%
+  st_transform(crs=map_crs) %>%
+  st_intersection(.,watershed)
+
+eji <- rbind(nc_eji, sc_eji)
+```
+
+```{r map_constants}
+annotations <- grobTree(
+  richtext_grob(
+  "<span style='background-color:white'>North<br>Carolina</span>", 
+  x=.83,  y=.9, hjust=.5, gp=gpar(col = "grey20", fontsize=8), box_gp = gpar(col = "white", fill = "white", alpha = .8)),
+  richtext_grob(
+  "<span style='background-color:white'>South<br>Carolina</span>", 
+  x=.17,  y=.1, hjust=.5, gp=gpar(col = "grey20", fontsize=8), box_gp = gpar(col = "white", fill = "white", alpha = .8)))
+
+w = geom_sf(data=watershed, color = alpha("orangered", .75), lwd = 1.5, fill = NA)
+s = geom_sf(data=states, color = alpha("white", .8), lwd = 1.5, fill = NA)
+```
+
+```{r pop_map, fig.height=12}
+p1 <- ggplot()+
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, aes(fill = pop)) +
+  s +
+  w +
+  geom_text(x=3, y=30, label="North Carolina")+
+  scale_fill_gradient(low = "grey90",high = "purple4")+
+  scale_size(range = c(1, 12)) +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(fill = "Population")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+i1 <- ggplot()+
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, aes(fill = medhhinc)) +
+  s +
+  w +
+  geom_text(x=3, y=30, label="North Carolina")+
+  scale_fill_gradient(low = "grey90",high = "springgreen4")+
+  scale_size(range = c(1, 8)) +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(fill = "MedHHInc")+
+  theme_catawba()+
+  annotation_custom(annotations) 
+
+p2 <- ggplot()+
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, fill = "grey90") +
+  s +
+  w +
+  geom_sf(data=catawba_points, color = alpha("purple4", .5), aes(size = pop)) +
+  scale_size(range = c(1, 20)) +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(size = "Population")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+e2 <- ggplot()+
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, fill = "grey90") +
+  s +
+  w +
+  geom_sf(data=catawba_points, color = alpha("springgreen4", .5), aes(size = medhhinc)) +
+  scale_size(range = c(1, 8)) +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(size = "medhhinc")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+plot_grid(p1, i1, p2, e2, align = "v", nrow = 2)
+```
+
+```{r eji_map, fig.height=12}
+eji1 <- ggplot()+
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  geom_sf(data=eji, aes(fill = SPL_EJI), color = alpha("white", .2)) +
+  scale_fill_gradient(low = "white",high = "darkred")+
+  s +
+  w +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(fill = "EJ Index")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+eji2 <- ggplot()+
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  geom_sf(data=eji, aes(fill = RPL_EBM), color = alpha("white", .2)) +
+  scale_fill_gradient(low = "white",high = "gold3")+
+  s+
+  w +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(fill = "Environmentally\nBurdened")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+eji3 <- ggplot()+
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  geom_sf(data=eji, aes(fill = EPL_IMPWTR), color = alpha("white", .2)) +
+  scale_fill_gradient(low = "white",high = "darkblue")+
+  s+
+  w +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(fill = "Impaired Waters")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+plot_grid(eji1, eji2, eji3, align = "v", nrow = 2)
+```
+
+```{r systems, fig.height=6}
+
+systems <- read_csv("data/UNC-EFC_Characteristics.csv") %>%
+  rename("place" = "Primary_Service_Area")
+
+#Fort Lawn, Great Falls, Kershaw County listed as unknown - set est_connections to 0.5* est_population
+systems_join <- inner_join(catawba_places, systems, by = "place") %>%
+  mutate(Est_Num_Connections = if_else(is.na(Est_Num_Connections),
+                                       Est_Service_Pop * 0.5,
+                                       Est_Num_Connections))
+
+systems_counties <- systems_join %>%
+  filter(grepl("County", place))%>%
+  st_drop_geometry()
+
+systems_counties2 <- systems_counties %>%
+  inner_join(., counties, by = "GEOID") %>%st_as_sf()
+
+systems_places <- systems_join %>%
+  filter(!grepl("County", place))
+
+ggplot()+
+  geom_sf(data=counties, color = alpha("white", .5), lwd = .1, fill = "grey90") +
+  s+
+  geom_sf(data=systems_counties2, color = alpha("white", .5), lwd = .1, aes(fill = Est_Num_Connections)) +
+  w +
+  geom_sf(data=systems_places,color = alpha("darkblue", .5), aes(size = Est_Num_Connections)) +
+  scale_size(range = c(1, 20)) +
+  scale_fill_gradient(low = "slategray1",high = "darkblue")+
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))+
+  labs(size = "Est. Connections:\nPlaces",
+       fill = "Est. Connections:\nCounties")+
+  theme_catawba()+
+  annotation_custom(annotations)
+
+```
+
+```{r wells and intakes, results='hide'}
+
+nc_infra <- get_spatial_layer("https://services.nconemap.gov/secure/rest/services/NC1Map_Water_Sources/MapServer/1")%>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(., watershed)
+
+nc_intake <- nc_infra %>%
+  dplyr::filter(source_type == "Surface Water") %>%
+  dplyr::select(pws_id, geoms) %>%
+  rename(id = pws_id) %>%
+  mutate(type = "intake")
+
+nc_wells <- nc_infra %>%
+  dplyr::filter(source_type == "Groundwater") %>%
+  dplyr::select(pws_id, geoms) %>%
+  rename(id = pws_id) %>%
+  mutate(type = "well")
+
+sc_intake <- get_spatial_layer("https://gis.dhec.sc.gov/arcgis/rest/services/water/publicwatersupply/MapServer/0")%>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(., watershed)%>%
+  dplyr::select(PWSNO, geoms) %>%
+  dplyr::rename(id = PWSNO)%>%
+  mutate(type = "intake")
+
+sc_wells <- get_spatial_layer("https://gis.dhec.sc.gov/arcgis/rest/services/water/publicwatersupply/MapServer/1")%>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(., watershed)%>%
+  dplyr::select(PWSNO, geoms) %>%
+  dplyr::rename(id = PWSNO)%>%
+  mutate(type = "well")
+
+intake <- rbind(nc_intake, sc_intake)
+
+wells <- rbind(nc_wells, sc_wells)
+```
+
+```{r map_intakes_wells, fig.height = 6}
+ggplot() +
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  s +
+  geom_sf(data=wells, aes(color = "wells"), size = 2) +
+  geom_sf(data=intake, aes(color = "intake"), size = 4) +
+  w +
+  scale_color_manual(values = c("wells" = alpha("slategray", .5), "intake" = alpha("blue", .5)),
+                     labels = c("Intakes", "Wells")) +
+  labs(color = "Type")+
+  theme_catawba() +
+  annotation_custom(annotations)
+```
+
+
+
+```{r other_infra, results='hide'}
+
+nc_ms4 <- st_read("data/nc_MS4.geojson") %>%
+  filter(PH2_INFO != "Not a Phase II Stormwater area")%>%
+  mutate(geometry = st_make_valid(st_zm(geometry)))%>%
+  st_transform(crs=map_crs) %>%
+  st_intersection(.,watershed)%>%
+  dplyr::select(FID, geometry) %>%
+  rename(id = FID) %>%
+  mutate(type = "MS4")
+
+sc_ms4 <- st_read("data/sc_MS4.geojson") %>%
+  mutate(geometry = st_make_valid(st_zm(geometry)))%>%
+  st_transform(crs=map_crs) %>%
+  st_intersection(.,watershed)%>%
+  dplyr::select(OBJECTID, geometry) %>%
+  rename(id = OBJECTID) %>%
+  mutate(type = "MS4")
+
+ms4 <- rbind(nc_ms4, sc_ms4)
+
+nc_npdes_w <- st_read("data/nc_npdes.geojson") %>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(.,watershed) %>%
+  filter(PERMIT_STATUS == "Active") %>%
+  dplyr::select(PERMITNUMBER, geometry) %>%
+  rename(id = PERMITNUMBER) %>%
+  mutate(type = "npdes")
+
+nc_npdes_s <- st_read("data/nc_npdes_stormwater.geojson") %>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(.,watershed) %>%
+  filter(STATUS == "Active") %>%
+  dplyr::select(PERMIT_NO, geometry) %>%
+  rename(id = PERMIT_NO) %>%
+  mutate(type = "npdes")
+
+sc_npdes <- st_read("data/sc_npdes.geojson") %>%
+  st_transform(crs=map_crs)%>%
+  st_intersection(.,watershed) %>%
+  filter(ACTIVITY == "Active") %>%
+  dplyr::select(NPDES, geometry) %>%
+  rename(id = NPDES) %>%
+  mutate(type = "npdes")
+
+npdes <- rbind(nc_npdes_w, nc_npdes_s, sc_npdes)
+
+nc_dams <- st_read("data/nc_dams.geojson")
+
+nc_hydroelectric <- nc_dams %>%
+  filter(primaryPurposeId == "Hydroelectric") %>%
+  dplyr::select(nidId, primaryPurposeId, geometry) %>%
+  rename(id = nidId,
+         type = primaryPurposeId,
+         geoms = geometry) %>%
+  st_transform(crs = map_crs)%>%
+  st_intersection(., watershed)
+
+nc_dams_other <- nc_dams %>%
+  filter(primaryPurposeId != "Hydroelectric") %>%
+  dplyr::select(nidId, primaryPurposeId, geometry) %>%
+  rename(id = nidId,
+         type = primaryPurposeId,
+         geoms = geometry) %>%
+  st_transform(crs = map_crs)%>%
+  st_intersection(., watershed)
+
+sc_dams <- st_read("data/sc_dams.geojson")
+
+sc_hydroelectric <- sc_dams %>%
+  filter(primaryPurposeId == "Hydroelectric") %>%
+  dplyr::select(nidId, primaryPurposeId, geometry) %>%
+  rename(id = nidId,
+         type = primaryPurposeId,
+         geoms = geometry) %>%
+  st_transform(crs = map_crs)%>%
+  st_intersection(., watershed)
+
+sc_dams_other <- sc_dams %>%
+  filter(primaryPurposeId != "Hydroelectric") %>%
+  dplyr::select(nidId, primaryPurposeId, geometry) %>%
+  rename(id = nidId,
+         type = primaryPurposeId,
+         geoms = geometry) %>%
+  st_transform(crs = map_crs)%>%
+  st_intersection(., watershed)
+
+hydroelectric <- rbind(nc_hydroelectric, sc_hydroelectric)
+
+dams_other <- rbind(nc_dams_other, sc_dams_other)
+```
+
+
+```{r joins, results='hide'}
+
+intersection <- st_intersection(catawba_tracts, ms4)
+
+# Count the number of polygons from MS4 touching each census tract
+count_per_tract <- intersection %>%
+  group_by(GEOID) %>%
+  summarise(ms4 = n()) %>%
+  st_drop_geometry()
+
+# Join the counts back to census tracts
+catawba_tracts_infra <- left_join(catawba_tracts, count_per_tract, by = c("GEOID" = "GEOID")) %>%
+  mutate(ms4 = ifelse(is.na(ms4), 0, ms4))
+
+
+within1 <- st_join(intake, catawba_tracts_infra, join = st_within)
+
+# Count the number of points from intake dataset within each census tract
+count_per_tract <- within1 %>%
+  group_by(GEOID) %>%
+  summarise(intakes = n())%>%
+  st_drop_geometry()
+
+# Join the counts back to census tracts
+catawba_tracts_infra <- left_join(catawba_tracts_infra, count_per_tract, by = "GEOID") %>%
+  mutate(intakes = ifelse(is.na(intakes), 0, intakes))
+
+within2 <- st_join(wells, catawba_tracts_infra, join = st_within)
+
+count_per_tract <- within2 %>%
+  group_by(GEOID) %>%
+  summarise(wells = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_infra <- left_join(catawba_tracts_infra, count_per_tract, by = "GEOID") %>%
+  mutate(wells = ifelse(is.na(wells), 0, wells))
+
+within3 <- st_join(npdes, catawba_tracts_infra, join = st_within)
+
+count_per_tract <- within3 %>%
+  group_by(GEOID) %>%
+  summarise(permits = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_infra <- left_join(catawba_tracts_infra, count_per_tract, by = "GEOID") %>%
+  mutate(permits = ifelse(is.na(permits), 0, permits))
+
+within4 <- st_join(hydroelectric, catawba_tracts_infra, join = st_within)
+
+count_per_tract <- within4 %>%
+  group_by(GEOID) %>%
+  summarise(hydroelectric = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_infra <- left_join(catawba_tracts_infra, count_per_tract, by = "GEOID") %>%
+  mutate(hydroelectric = ifelse(is.na(hydroelectric), 0, hydroelectric))
+
+within5 <- st_join(dams_other, catawba_tracts_infra, join = st_within)
+
+count_per_tract <- within5 %>%
+  group_by(GEOID) %>%
+  summarise(dams_other = n())%>%
+  st_drop_geometry()
+
+catawba_tracts_infra <- left_join(catawba_tracts_infra, count_per_tract, by = "GEOID") %>%
+  mutate(dams_other = ifelse(is.na(dams_other), 0, dams_other))
+
+eji_infra <- eji %>%
+  dplyr::select(GEOID, SPL_EJI, RPL_EBM, EPL_IMPWTR) %>%
+  st_drop_geometry()
+
+catawba_tracts_infra <- left_join(catawba_tracts_infra, eji_infra, by = "GEOID")
+
+catawba_tracts_geo <- catawba_tracts_infra %>%
+  dplyr::select(GEOID, geometry)
+```
+
+```{r cluster}
+
+
+df <- catawba_tracts_infra
+
+row.names(df) <- df[[1]]
+
+
+df <- df %>%
+  dplyr::select(-GEOID, -NAME, -RPL_EBM, -EPL_IMPWTR) %>%
+  st_drop_geometry() 
+
+df<- df %>% na.omit()
+
+df_scaled <- scale(df) %>% na.omit()
+
+fviz_nbclust(df, kmeans, method = "wss")
+
+clusters <- kmeans(df_scaled, centers = 3, nstart = 5)
+
+cluster_centers <- clusters$centers
+
+cluster_centers_df <- as.data.frame(cluster_centers)
+
+#fviz_cluster(clusters, data = df)
+
+
+df <- cbind(df, cluster = clusters$cluster)
+
+# Get the row names
+row_names <- rownames(df)
+
+# Reset row names
+rownames(df) <- NULL
+
+# Add row names as a regular column
+df <- cbind(GEOID = row_names, df)
+df$cluster <- as.character(df$cluster)
+
+catawba_tracts_infra_cluster <- left_join(catawba_tracts_geo, df, by = "GEOID")
+
+catawba_tracts_infra_cluster <- st_as_sf(catawba_tracts_infra_cluster) %>% na.omit()
+```
+
+```{r cluster_map, fig.height= 6}
+
+ggplot()+
+  geom_sf(data=catawba_tracts, fill = "grey90", color = alpha("white", .5))+
+  geom_sf(data=catawba_tracts_infra_cluster, aes(fill = cluster), color = alpha("white", .5))+
+  s+
+  w+
+  scale_fill_manual(values = c("1" = "goldenrod1", "2" = "darkseagreen2", "3" = "steelblue1"))+
+  theme_catawba()+
+  annotation_custom(annotations)
+  
+```
+
+```{r table}
+cluster_means <- df %>%
+  group_by(cluster) %>%
+  summarize_all(mean, na.rm = TRUE) %>%
+  dplyr::select(-GEOID)
+
+
+cluster_means %>%
+  kbl(digits = 1) %>%
+  kable_minimal(full_width = F)
+```
