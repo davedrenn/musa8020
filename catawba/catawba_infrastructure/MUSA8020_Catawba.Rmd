@@ -1344,3 +1344,39 @@ Variant included without Charlotte, NC location mapped
 # # Save the combined plot as an image file
 # #ggsave("images/cluster_map2.png", plot = gg_inset_map1, width = 5.5, height = 5.5, dpi = 300)
 ```
+
+```{r case study map}
+
+mcalpine <- data.frame(latitude = 35.06644964025516,
+                       longitude = -80.87616042091321)
+
+mcalpine_sf <- st_as_sf(mcalpine, coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(crs=map_crs)
+
+James <- st_read("data/water_nc_west.geojson") %>%
+  dplyr::filter(gnis_name == "Lake James") %>%
+  st_transform(crs=map_crs)
+  
+case_counties <- c("Chester County, South Carolina", "Kershaw County, South Carolina", "Lee County, South Carolina")
+
+case_cities <- c("Hickory city, North Carolina", "Gastonia city, North Carolina", "Camden city, South Carolina")
+
+case_counties_map <- counties %>%
+  filter(NAME %in% case_counties)
+
+case_cities_map <- places_points %>%
+  filter(NAME %in% case_cities)
+
+cs <- ggplot()+
+  geom_sf(data=counties, fill = "grey90", color = alpha("white", .5))+
+  geom_sf(data=James, fill = "blue", color = "blue", lwd = 1.5)+
+  s+
+  geom_sf(data = case_counties_map, fill = "goldenrod2", color = alpha("white", .5))+
+  geom_sf(data = case_cities_map, color = "seagreen", size = 4)+
+  geom_sf(data = mcalpine_sf, color = "seagreen", size = 4)+
+  w+
+  theme_catawba()
+
+#ggsave("images/case_study_update.png", plot = cs, width = 5.5, height = 5.5, dpi = 300)
+
+```
